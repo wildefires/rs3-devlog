@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json, os, sqlite3, sys, tempfile, threading, unittest, urllib.error, urllib.request
+from typing import Any, List, Tuple
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
@@ -58,6 +59,34 @@ class Server(unittest.TestCase):
         self.assertEqual(self.get("/api/logs?plugin=demo%20(db)&after=0"),
                          [{"n": 1, "line": "x first"}, {"n": 2, "line": "x second"}])
         self.assertEqual(self.get("/api/logs?plugin=demo%20(db)&after=1"), [{"n": 2, "line": "x second"}])
+
+    def make_db(self, rows: List[Tuple[str, str, str]]) -> None:
+        con = sqlite3.connect(logviewer.DB)
+        con.execute("CREATE TABLE IF NOT EXISTS DataStore (PluginID, Key, Type, Value)")
+        con.executemany("INSERT INTO DataStore VALUES (?, ?, 3, ?)", rows)
+        con.commit()
+        con.close()
+
+    def test_db_is_copied_only_when_it_changes(self) -> None:
+        self.make_db([("demo", "log:000001", "x first")])
+        copies: List[str] = []
+        real_copy = logviewer.shutil.copy
+
+        def counting_copy(src: str, dst: str) -> Any:
+            copies.append(src)
+            return real_copy(src, dst)
+
+        logviewer.shutil.copy = counting_copy
+        try:
+            self.assertEqual(len(logviewer.query("SELECT * FROM DataStore")), 1)
+            first = len(copies)
+            self.assertEqual(len(logviewer.query("SELECT * FROM DataStore")), 1)
+            self.assertEqual(len(copies), first, "unchanged DB was copied again")
+            self.make_db([("demo", "log:000002", "x second")])
+            self.assertEqual(len(logviewer.query("SELECT * FROM DataStore")), 2)
+            self.assertGreater(len(copies), first, "changed DB was not copied")
+        finally:
+            logviewer.shutil.copy = real_copy
 
     def test_bad_path_rejected(self) -> None:
         with self.assertRaises(urllib.error.HTTPError) as cm:

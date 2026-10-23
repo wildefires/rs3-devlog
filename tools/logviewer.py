@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import collections, json, os, re, shutil, sqlite3, tempfile, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, DefaultDict, Deque, List, Tuple, TypedDict, Union
+from typing import Any, DefaultDict, Deque, Dict, List, Tuple, TypedDict, Union
 from urllib.parse import parse_qs, unquote, urlparse
 import devconfig
 
@@ -58,19 +58,49 @@ def text(blob: Union[str, bytes]) -> str:
     return blob.decode("utf-8", errors="replace").rstrip("\x00")
 
 
+db_lock = threading.Lock()
+copied: List[Tuple[str, int, int]] = []  # db_state() that the saved answers below were read at
+answers: Dict[Tuple[str, Tuple[str, ...]], List[Any]] = {}  # (sql, args) -> rows, while the DB is unchanged
+
+
+def db_state() -> List[Tuple[str, int, int]]:
+    """Path, size and modified time of PluginData.db and its WAL files; any write changes it."""
+    state: List[Tuple[str, int, int]] = []
+    for ext in ("", "-wal", "-shm"):
+        try:
+            st = os.stat(DB + ext)
+        except FileNotFoundError:
+            continue
+        state.append((DB + ext, st.st_size, st.st_mtime_ns))
+    return state
+
+
 def query(sql: str, args: Tuple[str, ...] = ()) -> List[Any]:
-    """Rows from a temp copy of PluginData.db (with its WAL files), or [] if there's no DB."""
+    """Rows from a temp copy of PluginData.db (with its WAL files), or [] if there's no DB.
+
+    The copy keeps the client's live file untouched. While the real files are unchanged, the same
+    query gets its saved answer instead of a fresh copy.
+    """
+    global copied
     if not os.path.exists(DB):
         return []
-    with tempfile.TemporaryDirectory() as d:
-        for ext in ("", "-wal", "-shm"):
-            if os.path.exists(DB + ext):
-                shutil.copy(DB + ext, os.path.join(d, "db" + ext))
-        con = sqlite3.connect(os.path.join(d, "db"))
-        try:
-            return con.execute(sql, args).fetchall()
-        finally:
-            con.close()
+    with db_lock:
+        state = db_state()
+        if state != copied:
+            answers.clear()
+            copied = state
+        key = (sql, args)
+        if key not in answers:
+            with tempfile.TemporaryDirectory() as d:
+                for ext in ("", "-wal", "-shm"):
+                    if os.path.exists(DB + ext):
+                        shutil.copy(DB + ext, os.path.join(d, "db" + ext))
+                con = sqlite3.connect(os.path.join(d, "db"))
+                try:
+                    answers[key] = con.execute(sql, args).fetchall()
+                finally:
+                    con.close()
+        return answers[key]
 
 
 class Handler(BaseHTTPRequestHandler):
