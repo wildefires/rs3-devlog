@@ -24,11 +24,52 @@
     }
 
     #bar input[type=text],
-    #bar select {
+    #bar select,
+    #bar button,
+    #topics-menu summary {
       background: #0e1013;
       color: inherit;
       border: 1px solid #3a3f48;
       padding: 2px 4px;
+    }
+
+    /* Topics: a button that opens a scrolling list of checkboxes. */
+    #topics-menu {
+      position: relative;
+    }
+
+    #topics-menu summary {
+      cursor: pointer;
+      list-style: none;
+    }
+
+    #topics-menu summary::-webkit-details-marker {
+      display: none;
+    }
+
+    #topics-panel {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      z-index: 1;
+      min-width: 180px;
+      max-height: 50vh;
+      overflow-y: auto;
+      background: #1d2026;
+      border: 1px solid #3a3f48;
+      padding: 6px;
+    }
+
+    #topics-panel .actions {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    #topics label {
+      display: block;
+      padding: 2px 0;
+      white-space: nowrap;
     }
 
     #out div {
@@ -40,8 +81,11 @@
       background: #20242b;
     }
 
-    /* Line number column. */
+    /* Line number column: fixed width, so text lines up past line 9. */
     .n {
+      display: inline-block;
+      min-width: 4ch;
+      text-align: right;
       color: #6b7280;
       margin-right: 8px;
     }
@@ -50,8 +94,17 @@
 <body>
   <div id="bar">
     <select id="plugin"></select>
-    <input id="filter" type="text" placeholder="filter">
-    <span id="topics"></span>
+    <input id="filter" type="text" placeholder="filter text">
+    <details id="topics-menu">
+      <summary id="topics-summary" title="Show or hide lines by topic">Topics ▾</summary>
+      <div id="topics-panel">
+        <div class="actions">
+          <button id="topics-all">All</button>
+          <button id="topics-none">None</button>
+        </div>
+        <div id="topics"></div>
+      </div>
+    </details>
     <label><input id="follow" type="checkbox" checked> follow</label>
     <button id="clear">Clear view</button>
   </div>
@@ -84,16 +137,40 @@
       if ($("follow").checked) scrollTo(0, document.body.scrollHeight);
     }
 
+    // The button's text: how many topics are shown, e.g. "Topics: 2 of 3".
+    function updateTopicsSummary() {
+      const shownCount = seen.size - off.size;
+      const text = !seen.size ? "none yet"
+        : !off.size ? `all ${seen.size}`
+        : !shownCount ? "none shown"
+        : `${shownCount} of ${seen.size}`;
+      $("topics-summary").textContent = `Topics: ${text} ▾`;
+    }
+
+    // Adds a checkbox for a newly seen topic, keeping the list alphabetical.
     function addTopic(topic) {
       if (seen.has(topic)) return;
       seen.add(topic);
       const label = document.createElement("label");
+      label.dataset.topic = topic;
       label.innerHTML = `<input type="checkbox" checked> ${esc(topic)}`;
       label.firstChild.onchange = ev => {
         if (ev.target.checked) off.delete(topic); else off.add(topic);
+        updateTopicsSummary();
         render();
       };
-      $("topics").append(label);
+      const next = [...$("topics").children].find(l => l.dataset.topic > topic);
+      $("topics").insertBefore(label, next || null);
+      updateTopicsSummary();
+    }
+
+    // Ticks or unticks every topic.
+    function setAllTopics(on) {
+      off.clear();
+      if (!on) seen.forEach(t => off.add(t));
+      for (const box of $("topics").querySelectorAll("input")) box.checked = on;
+      updateTopicsSummary();
+      render();
     }
 
     // Fetches lines newer than `last` for the selected plugin.
@@ -132,16 +209,24 @@
       seen.clear();
       off.clear();
       $("topics").innerHTML = "";
+      updateTopicsSummary();
       render();
       poll();
     };
     $("filter").oninput = render;
+    $("topics-all").onclick = () => setAllTopics(true);
+    $("topics-none").onclick = () => setAllTopics(false);
+    // Close the topics list on a click anywhere outside it.
+    document.addEventListener("click", ev => {
+      if (!$("topics-menu").contains(ev.target)) $("topics-menu").open = false;
+    });
     $("clear").onclick = () => {
       lines = [];
       render();
     };
 
     (async () => {
+      updateTopicsSummary();
       await refreshPlugins();
       poll();
       setInterval(() => {

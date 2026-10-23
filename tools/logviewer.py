@@ -3,7 +3,7 @@
     python3 tools/logviewer.py    then open http://127.0.0.1:8766
 
 Shows two kinds of source in the plugin dropdown:
-- "<plugin>": PersistentDB rows (DevLog.TO_DB), read from a temp copy of the client's PluginData.db,
+- "<plugin> (db)": PersistentDB rows (DevLog.TO_DB), read from a temp copy of the client's PluginData.db,
   never the real one.
 - "<plugin> (http)": lines POSTed to /log/<plugin> (DevLog.TO_SERVER). Each is also appended to
   logs/plugin.log; when that reaches 25 MB it becomes logs/plugin.log.1 (replacing the old one),
@@ -22,7 +22,9 @@ DB = os.path.join(JAGEX, "plugins", "PluginData.db") if JAGEX else ""
 LINE = re.compile(r"log:(\d+)$")
 LOG = os.path.join(devconfig.ROOT, "logs", "plugin.log")
 MAX_BYTES = 50 * 1024 * 1024
+# Dropdown labels: which source a plugin entry reads from.
 HTTP = " (http)"
+STORED = " (db)"
 
 
 
@@ -88,7 +90,7 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(url.query)
         if url.path == "/api/plugins":
             rows = query("SELECT DISTINCT PluginID, Key FROM DataStore WHERE Key LIKE 'log:%'")
-            names = {text(p) for p, k in rows if LINE.match(text(k))}
+            names = {text(p) + STORED for p, k in rows if LINE.match(text(k))}
             with lock:
                 names |= {p + HTTP for p in posted}
             self.send(json.dumps(sorted(names)), "application/json")
@@ -99,6 +101,7 @@ class Handler(BaseHTTPRequestHandler):
                     out = [o for o in posted.get(plugin[:-len(HTTP)], ()) if o["n"] > after]
                 self.send(json.dumps(out), "application/json")
                 return
+            plugin = plugin[:-len(STORED)] if plugin.endswith(STORED) else plugin
             rows = query("SELECT Key, Value FROM DataStore WHERE PluginID = ? AND Key LIKE 'log:%'", (plugin,))
             stored: List[Line] = [{"n": int(m.group(1)), "line": text(v)}
                                    for k, v in rows if (m := LINE.match(text(k)))]

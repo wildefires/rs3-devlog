@@ -1,7 +1,7 @@
 """The log server. Run: python3 -m unittest discover tests (from the repo root)."""
 from __future__ import annotations
 
-import json, os, sys, tempfile, threading, unittest, urllib.error, urllib.request
+import json, os, sqlite3, sys, tempfile, threading, unittest, urllib.error, urllib.request
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
@@ -13,6 +13,7 @@ class Server(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         logviewer.LOG = os.path.join(self.dir.name, "logs", "plugin.log")
         logviewer.MAX_BYTES = 200
+        logviewer.DB = os.path.join(self.dir.name, "PluginData.db")
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), logviewer.Handler)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
@@ -35,6 +36,28 @@ class Server(unittest.TestCase):
         self.assertLessEqual(size, logviewer.MAX_BYTES + 50)  # each file stops growing once past half
         with open(logviewer.LOG, encoding="utf-8") as f:
             self.assertTrue(f.read().endswith("demo #000009 x line 9\n"))
+
+    def get(self, path: str) -> object:
+        with urllib.request.urlopen(self.base + path) as r:
+            return json.load(r)
+
+    def test_db_source_is_labelled_and_readable(self) -> None:
+        con = sqlite3.connect(logviewer.DB)
+        con.execute("CREATE TABLE DataStore (PluginID, Key, Type, Value)")
+        # The client stores some keys and values as NUL-padded blobs.
+        con.executemany("INSERT INTO DataStore VALUES (?, ?, 3, ?)", [
+            ("demo", "log:000002", b"x second\x00"),
+            ("demo", "log:000001", "x first"),
+            ("demo", "log:next", 3),
+            ("other", "setting", "not a log line"),
+        ])
+        con.commit()
+        con.close()
+        self.post("/log/demo", "000001 x sent")
+        self.assertEqual(self.get("/api/plugins"), ["demo (db)", "demo (http)"])
+        self.assertEqual(self.get("/api/logs?plugin=demo%20(db)&after=0"),
+                         [{"n": 1, "line": "x first"}, {"n": 2, "line": "x second"}])
+        self.assertEqual(self.get("/api/logs?plugin=demo%20(db)&after=1"), [{"n": 2, "line": "x second"}])
 
     def test_bad_path_rejected(self) -> None:
         with self.assertRaises(urllib.error.HTTPError) as cm:

@@ -8,6 +8,8 @@ Debug logging for RuneScape (RS3) Client API plugins. In development, each `Log.
 
 In a release, the same calls do nothing.
 
+![The log viewer showing a plugin's log lines](docs/viewer.png)
+
 Works on Windows, macOS and Linux with Python 3.8+.
 
 ## How it works
@@ -41,6 +43,7 @@ Works on Windows, macOS and Linux with Python 3.8+.
 4. Start the viewer and open <http://127.0.0.1:8766>:
 
    ```bash
+   # on windows, just python instead of python3
    python3 tools/logviewer.py
    ```
 
@@ -70,8 +73,12 @@ Log server status messages always print.
 
 The viewer's dropdown lists:
 
-- **`<plugin name>`**: PersistentDB lines, under the `"name"` in `plugin.json`.
+- **`<plugin name> (db)`**: PersistentDB lines, under the `"name"` in `plugin.json`.
 - **`<folder> (http)`**: lines received by the server since it started.
+
+The **Topics** menu shows or hides lines by topic, and the text box filters by content.
+
+![The Topics menu with two topics hidden](docs/viewer-topics.png)
 
 The server also writes every line to `logs/plugin.log`. At 25 MB it moves to `logs/plugin.log.1`, replacing the old one.
 
