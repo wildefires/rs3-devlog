@@ -1,0 +1,154 @@
+<!doctype html>
+<!-- The log viewer page, served at / by tools/logviewer.py. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Plugin log</title>
+  <style>
+    body {
+      background: #14161a;
+      color: #d4d7dd;
+      font: 13px monospace;
+      margin: 0;
+    }
+
+    #bar {
+      position: sticky;
+      top: 0;
+      background: #1d2026;
+      padding: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #bar input[type=text],
+    #bar select {
+      background: #0e1013;
+      color: inherit;
+      border: 1px solid #3a3f48;
+      padding: 2px 4px;
+    }
+
+    #out div {
+      white-space: pre-wrap;
+      padding: 0 6px;
+    }
+
+    #out div:hover {
+      background: #20242b;
+    }
+
+    /* Line number column. */
+    .n {
+      color: #6b7280;
+      margin-right: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <select id="plugin"></select>
+    <input id="filter" type="text" placeholder="filter">
+    <span id="topics"></span>
+    <label><input id="follow" type="checkbox" checked> follow</label>
+    <button id="clear">Clear view</button>
+  </div>
+  <div id="out"></div>
+
+  <script>
+    const MAX_LINES = 2000;
+    const POLL_MS = 1500;
+
+    const $ = id => document.getElementById(id);
+    const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    // Every line starts with its topic.
+    const topicOf = line => line.split(" ")[0];
+
+    let last = 0;          // highest line number received for the selected plugin
+    let lines = [];        // [{n, line}], newest last
+    const off = new Set(); // topics unticked by the user
+    const seen = new Set(); // topics that have a checkbox
+
+    function shown(l) {
+      const filter = $("filter").value.toLowerCase();
+      return !off.has(topicOf(l.line)) && (!filter || l.line.toLowerCase().includes(filter));
+    }
+
+    function render() {
+      $("out").innerHTML = lines
+        .filter(shown)
+        .map(l => `<div><span class="n">${l.n}</span>${esc(l.line)}</div>`)
+        .join("");
+      if ($("follow").checked) scrollTo(0, document.body.scrollHeight);
+    }
+
+    function addTopic(topic) {
+      if (seen.has(topic)) return;
+      seen.add(topic);
+      const label = document.createElement("label");
+      label.innerHTML = `<input type="checkbox" checked> ${esc(topic)}`;
+      label.firstChild.onchange = ev => {
+        if (ev.target.checked) off.delete(topic); else off.add(topic);
+        render();
+      };
+      $("topics").append(label);
+    }
+
+    // Fetches lines newer than `last` for the selected plugin.
+    async function poll() {
+      try {
+        const plugin = encodeURIComponent($("plugin").value);
+        const fresh = await (await fetch(`/api/logs?plugin=${plugin}&after=${last}`)).json();
+        for (const l of fresh) {
+          lines.push(l);
+          last = l.n;
+          addTopic(topicOf(l.line));
+        }
+        lines = lines.slice(-MAX_LINES);
+        if (fresh.length) render();
+      } catch (e) {
+        // Server restarting or briefly unreachable: try again on the next poll.
+      }
+    }
+
+    // Adds newly seen plugins to the dropdown. On first load, prefers a server ("(http)") source.
+    async function refreshPlugins() {
+      const names = await (await fetch("/api/plugins")).json();
+      const select = $("plugin");
+      const hadOptions = select.options.length > 0;
+      for (const name of names) {
+        if (![...select.options].some(o => o.value === name)) select.add(new Option(name, name));
+      }
+      if (!hadOptions && names.length) {
+        select.value = names.find(name => name.endsWith(" (http)")) || names[0];
+      }
+    }
+
+    $("plugin").onchange = () => {
+      last = 0;
+      lines = [];
+      seen.clear();
+      off.clear();
+      $("topics").innerHTML = "";
+      render();
+      poll();
+    };
+    $("filter").oninput = render;
+    $("clear").onclick = () => {
+      lines = [];
+      render();
+    };
+
+    (async () => {
+      await refreshPlugins();
+      poll();
+      setInterval(() => {
+        refreshPlugins();
+        poll();
+      }, POLL_MS);
+    })();
+  </script>
+</body>
+</html>

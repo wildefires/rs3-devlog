@@ -1,0 +1,11 @@
+{
+  "name": "devlog-example",
+  "version": "0.1.0",
+  "contactEmailAddress": "you@example.com",
+  "optionalPermissions": [
+    "httpAccess"
+  ],
+  "urls": {
+    "logserver": "http://127.0.0.1:8766"
+  }
+}
