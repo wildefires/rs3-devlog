@@ -154,6 +154,101 @@ class Deploy(unittest.TestCase):
         self.assertIn("Replaced mine/devlog.lua", out)
         self.assertIn("Not updated theirs/devlog.lua: not an rs3-devlog file", out)
 
+    def source_devlog(self) -> str:
+        return self.read(os.path.join(self.repo, "plugin", "devlog.lua"))
+
+    def test_upgrade_keeps_settings_and_resets_name(self) -> None:
+        old = (self.source_devlog()
+               .replace("DevLog.NAME = \"devlog-example\"", "DevLog.NAME = \"stale\"")
+               .replace("DevLog.TO_DB = true", "DevLog.TO_DB = false")
+               .replace("DevLog.TOPICS = { startup = true, heartbeat = true }", "DevLog.TOPICS = { combat = true }")
+               .replace("\n", "\r\n"))  # as saved by a Windows editor
+        mine = self.other("mine")
+        with open(os.path.join(mine, "devlog.lua"), "w", encoding="utf-8", newline="") as f:
+            f.write(old)
+        out = self.run_deploy("mine", "--upgrade")
+        new = self.read(os.path.join(mine, "devlog.lua"))
+        self.assertIn("Kept settings TO_DB, TOPICS in mine/devlog.lua", out)
+        self.assertIn("DevLog.TO_DB = false\n", new)
+        self.assertIn("DevLog.TOPICS = { combat = true }\n", new)
+        self.assertIn("DevLog.TO_SERVER = true\n", new)
+        self.assertIn('DevLog.NAME = "mine"\n', new)
+        self.assertNotIn("\r", new)
+
+    def test_upgrade_reports_a_multiline_setting_it_cannot_keep(self) -> None:
+        old = self.source_devlog().replace("DevLog.TOPICS = { startup = true, heartbeat = true }",
+                                           "DevLog.TOPICS = {\n  combat = true,\n}")
+        mine = self.other("mine", old)
+        out = self.run_deploy("mine", "--upgrade")
+        self.assertIn("Not kept mine/devlog.lua: DevLog.TOPICS spans several lines", out)
+        self.assertIn("DevLog.TOPICS = { startup = true, heartbeat = true }", self.read(os.path.join(mine, "devlog.lua")))
+
+    def test_settings_untouched_without_upgrade(self) -> None:
+        old = self.source_devlog().replace("DevLog.TO_DB = true", "DevLog.TO_DB = false")
+        mine = self.other("mine", old)
+        out = self.run_deploy("mine")
+        self.assertEqual(self.read(os.path.join(mine, "devlog.lua")), old)
+        self.assertNotIn("Kept settings", out)
+
+    # Backups
+
+    def backups(self, plugin: str) -> Dict[str, str]:
+        folder = os.path.join(self.repo, "backup", plugin)
+        if not os.path.isdir(folder):
+            return {}
+        return {n: self.read(os.path.join(folder, n)) for n in sorted(os.listdir(folder))}
+
+    def test_upgrade_backs_up_each_replaced_file_first(self) -> None:
+        old = MARKER + " (old copy)\n"
+        mine = self.other("mine", old)
+        self.write(os.path.join(mine, "log.lua"), old)
+        out = self.run_deploy("mine", "--upgrade")
+        saved = self.backups("mine")
+        self.assertEqual(len(saved), 2, saved)
+        for name, text in saved.items():
+            self.assertRegex(name, r"^(log|devlog)-backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.lua$")
+            self.assertEqual(text, old)
+        self.assertIn("Backed up mine/devlog.lua to", out)
+        self.assertNotEqual(self.read(os.path.join(mine, "devlog.lua")), old)
+
+    def test_no_backup_for_added_files_or_dry_runs(self) -> None:
+        self.other("fresh")
+        self.other("mine", MARKER + " (old copy)\n")
+        self.run_deploy("mine", "--upgrade", "--dry-run")
+        self.run_deploy("fresh", "--upgrade")
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "backup")))
+
+    def test_a_failed_backup_leaves_the_file_alone(self) -> None:
+        mine = self.other("mine", MARKER + " (old copy)\n")
+        self.write(os.path.join(self.repo, "backup"), "a file where the backup folder should be")
+        self.run_deploy("mine", "--upgrade", ok=False)
+        self.assertEqual(self.read(os.path.join(mine, "devlog.lua")), MARKER + " (old copy)\n")
+
+    def test_upgrade_leaves_up_to_date_files_alone(self) -> None:
+        mine = self.other("mine")
+        self.run_deploy("mine")
+        before = self.snapshot()
+        out = self.run_deploy("mine", "--upgrade")
+        self.assertEqual(self.snapshot(), before)
+        self.assertIn("Not updated mine/log.lua: already up to date", out)
+        self.assertIn("Not updated mine/devlog.lua: already up to date", out)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "backup")))
+        self.assertTrue(os.path.exists(os.path.join(mine, "devlog.lua")))
+
+    def test_edit_plugin_json_leaves_a_complete_manifest_alone(self) -> None:
+        other = self.other("other")
+        self.run_deploy("other", "--edit-plugin-json")
+        before = self.read(os.path.join(other, "plugin.json"))
+        out = self.run_deploy("other", "--edit-plugin-json")
+        self.assertIn("Not updated other/plugin.json: already has httpAccess and the log server URL", out)
+        self.assertEqual(self.read(os.path.join(other, "plugin.json")), before)
+
+    def test_edit_plugin_json_skips_plugins_with_their_own_devlog(self) -> None:
+        theirs = self.other("theirs", "return {}\n")
+        out = self.run_deploy("theirs", "--edit-plugin-json")
+        self.assertEqual(self.manifest(theirs), {"name": "Other"})
+        self.assertIn("Not updated theirs/plugin.json: its devlog.lua isn't an rs3-devlog file", out)
+
     def test_edit_plugin_json_adds_logserver_and_keeps_fields(self) -> None:
         other = self.other("other")
         self.run_deploy("--all", "--edit-plugin-json")

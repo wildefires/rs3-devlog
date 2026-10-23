@@ -103,7 +103,7 @@ By default it only adds missing files, and prints every file it skips.
 
 - `--all`: every plugin in `dev_plugins/`, except folders named only by digits.
 - `--include-downloaded`: with `--all`, also the numbered folders (plugins downloaded from mod.io).
-- `--upgrade`: replace existing `log.lua` and `devlog.lua` files that start with the `-- rs3-devlog managed file` marker. This resets that plugin's settings.
+- `--upgrade`: replace existing `log.lua` and `devlog.lua` files that start with the `-- rs3-devlog managed file` marker. Your `DevLog.*` settings carry over into the new `devlog.lua`; a setting spread over several lines is reset, and deploy says so. The old files are copied to `backup/<folder>/<file>-backup-<Y-m-d-H-M-S>.lua` first.
 - `--edit-plugin-json`: add `httpAccess` and the log server URL to `plugin.json`.
 - `--dry-run`: print what would happen, without writing anything.
 
