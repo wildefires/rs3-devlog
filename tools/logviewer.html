@@ -72,8 +72,9 @@
       white-space: nowrap;
     }
 
+    /* One log line: number, topic and message columns. Long messages wrap inside their own column. */
     #out div {
-      white-space: pre-wrap;
+      display: flex;
       padding: 0 6px;
     }
 
@@ -83,11 +84,32 @@
 
     /* Line number column: fixed width, so text lines up past line 9. */
     .n {
+      flex: none;
       display: inline-block;
       min-width: 4ch;
       text-align: right;
       color: #6b7280;
       margin-right: 8px;
+    }
+
+    /* Topic column: as wide as the longest topic (up to TOPIC_MAX), right-aligned, cut off with "…". */
+    .topic {
+      flex: none;
+      width: var(--topic-width, 8ch);
+      margin-right: 8px;
+      text-align: right;
+      color: #e8964a;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .msg {
+      flex: 1;
+      min-width: 0;
+      color: #c3d0e0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
   </style>
 </head>
@@ -112,17 +134,20 @@
 
   <script>
     const MAX_LINES = 2000;
+    const TOPIC_MAX = 20; // widest the topic column gets, in characters
     const POLL_MS = 1500;
 
     const $ = id => document.getElementById(id);
-    const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-    // Every line starts with its topic.
+    const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    // Every line is "<topic> <message>".
     const topicOf = line => line.split(" ")[0];
+    const messageOf = line => (line.indexOf(" ") < 0 ? "" : line.slice(line.indexOf(" ") + 1));
 
     let last = 0;          // highest line number received for the selected plugin
     let lines = [];        // [{n, line}], newest last
     const off = new Set(); // topics unticked by the user
     const seen = new Set(); // topics that have a checkbox
+    let widest = 0;         // longest topic seen, which sets the topic column's width
 
     function shown(l) {
       const filter = $("filter").value.toLowerCase();
@@ -132,7 +157,11 @@
     function render() {
       $("out").innerHTML = lines
         .filter(shown)
-        .map(l => `<div><span class="n">${l.n}</span>${esc(l.line)}</div>`)
+        .map(l => {
+          const topic = esc(topicOf(l.line));
+          return `<div><span class="n">${l.n}</span><span class="topic" title="${topic}">${topic}</span>`
+            + `<span class="msg">${esc(messageOf(l.line))}</span></div>`;
+        })
         .join("");
       if ($("follow").checked) scrollTo(0, document.body.scrollHeight);
     }
@@ -151,6 +180,8 @@
     function addTopic(topic) {
       if (seen.has(topic)) return;
       seen.add(topic);
+      widest = Math.max(widest, topic.length);
+      document.documentElement.style.setProperty("--topic-width", `${Math.min(widest, TOPIC_MAX)}ch`);
       const label = document.createElement("label");
       label.dataset.topic = topic;
       label.innerHTML = `<input type="checkbox" checked> ${esc(topic)}`;
@@ -173,11 +204,18 @@
       render();
     }
 
-    // Fetches lines newer than `last` for the selected plugin.
+    // Fetches lines newer than `last` for the selected plugin. One fetch at a time, and a fetch that
+    // finishes after the plugin was switched is dropped, so lines never mix, repeat or reorder.
+    let polling = false;
+    let generation = 0; // bumped on every plugin switch
     async function poll() {
+      if (polling) return;
+      polling = true;
+      const started = generation;
       try {
         const plugin = encodeURIComponent($("plugin").value);
         const fresh = await (await fetch(`/api/logs?plugin=${plugin}&after=${last}`)).json();
+        if (started !== generation) return;
         for (const l of fresh) {
           lines.push(l);
           last = l.n;
@@ -187,6 +225,8 @@
         if (fresh.length) render();
       } catch (e) {
         // Server restarting or briefly unreachable: try again on the next poll.
+      } finally {
+        polling = false;
       }
     }
 
@@ -204,10 +244,12 @@
     }
 
     $("plugin").onchange = () => {
+      generation++;
       last = 0;
       lines = [];
       seen.clear();
       off.clear();
+      widest = 0;
       $("topics").innerHTML = "";
       updateTopicsSummary();
       render();
